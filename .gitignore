@@ -1,5 +1,4 @@
 
 venv/
 database_data.db
-database_data.db
 __pycache__/data_handler.cpython-311.pyc
