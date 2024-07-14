@@ -195,6 +195,12 @@ class OwnCompanyData:
         res = res.with_columns(account_owner_name=pl.col("account_owner_name").str.json_decode(pl.List(pl.Utf8)))
         return res.to_dicts()
 
+    def get_all_own_company_names(self):
+        query = f"SELECT company_name FROM {self.table_name}"
+        res = self.db.execute_select_query(query)
+        res = res['company_name'].to_list()
+        return res
+
     def update_own_company(self, id, company: dict):
         query_check_company_exists = f"SELECT * FROM {self.table_name} WHERE company_id = {id}"
         res = self.db.execute_select_query(query_check_company_exists)
@@ -257,11 +263,10 @@ class SalaryData:
                 payment INTEGER,
                 record_date TEXT,
                 employee_id INTEGER,
-                type_of_work TEXT,
                 type_of_payment TEXT,
                 mode_of_payment TEXT,
                 company TEXT,
-                works TEXT,
+                work_ids TEXT,
                 costs TEXT,
                 quantities TEXT,
                 work_done INTEGER,
@@ -285,7 +290,7 @@ class SalaryData:
         if not employee_data.check_employee_exists(employee_id, company):
             raise ValueError(f"Employee with id {employee_id} does not exist")
         
-        works = entry.get("works")
+        work_ids = entry.get("work_ids")
         costs = entry.get("costs")
         quantities = entry.get("quantities")
 
@@ -294,21 +299,20 @@ class SalaryData:
             if dot_product > 0:
                 raise ValueError(f"Advance payment not allowed in same entry with work done")
 
-        works = json.dumps(works)
+        work_ids = json.dumps(work_ids)
         costs = json.dumps(costs)
         quantities = json.dumps(quantities)
 
         salary_entry_query = f"""
-        INSERT INTO {self.table_name} (payment, record_date, employee_id, type_of_work, type_of_payment, mode_of_payment, company, works, costs, quantities, work_done, created_at)
+        INSERT INTO {self.table_name} (payment, record_date, employee_id, type_of_payment, mode_of_payment, company, works, costs, quantities, work_done, created_at)
         VALUES (
             {entry.get('payment')},
             '{entry.get('record_date')}',
             {employee_id},
-            '{entry.get('type_of_work')}',
             '{entry.get('type_of_payment')}',
             '{entry.get('mode_of_payment')}',
             '{company}',
-            '{works}',
+            '{work_ids}',
             '{costs}',
             '{quantities}',
             {dot_product},
@@ -323,7 +327,7 @@ class SalaryData:
         res = self.db.execute_select_query(query)
         res = res.with_columns(costs=pl.col("costs").str.json_decode(pl.List(pl.Int64)))
         res = res.with_columns(quantities=pl.col("quantities").str.json_decode(pl.List(pl.Int64)))
-        res = res.with_columns(works=pl.col("works").str.json_decode(pl.List(pl.Utf8)))
+        res = res.with_columns(works=pl.col("work_ids").str.json_decode(pl.List(pl.Int64)))
         return res.to_dicts()
     
     def get_all_salary_entries(self):
@@ -331,7 +335,16 @@ class SalaryData:
         res = self.db.execute_select_query(query)
         res = res.with_columns(costs=pl.col("costs").str.json_decode(pl.List(pl.Int64)))
         res = res.with_columns(quantities=pl.col("quantities").str.json_decode(pl.List(pl.Int64)))
-        res = res.with_columns(works=pl.col("works").str.json_decode(pl.List(pl.Utf8)))
+        res = res.with_columns(work_ids=pl.col("work_ids").str.json_decode(pl.List(pl.Int64)))
+        res = res.with_row_count()
+        df = res.select(pl.col('work_ids'), pl.col('index'))
+        df = df.explode(pl.col('work_ids'))
+
+        work_handler = Works()
+        works = work_handler.get_all_works_brief_as_df()
+
+        df = df.join(works, left_on='work_ids', right_on='work_id').group_by('index').agg(pl.col('work_name'), pl.col('bus_type'))
+        res = res.join(df, left_on='index', right_on='index')
         return res.to_dicts()
     
     def delete_salary_entry(self, employee_id, salary_entry_id):
@@ -391,6 +404,14 @@ class SalaryData:
         res = res.with_columns(works=pl.col("works").str.json_decode(pl.List(pl.Utf8)))
         return res.to_dicts()
     
+    def get_all_salary_entries_of_an_employee_company(self, employee_id, company):
+        query = f"SELECT * FROM {self.table_name} WHERE employee_id = {employee_id} AND company = '{company}'"
+        res = self.db.execute_select_query(query)
+        res = res.with_columns(costs=pl.col("costs").str.json_decode(pl.List(pl.Int64)))
+        res = res.with_columns(quantities=pl.col("quantities").str.json_decode(pl.List(pl.Int64)))
+        res = res.with_columns(works=pl.col("works").str.json_decode(pl.List(pl.Utf8)))
+        return res.to_dicts()
+    
 
 
     
@@ -412,5 +433,157 @@ class SummaryInsights:
         if res.is_empty():
             return None
         return res.to_dicts()[0]
+    
+
+class Works:
+
+    def __init__(self) -> None:
+        self.table_name = "works"
+        self.db = DatabaseInterface(DB_NAME)
+        self.check_table_exists()
+    
+    def check_table_exists(self):
+        query = f"""
+                CREATE TABLE IF NOT EXISTS {self.table_name} (
+                work_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                work_name TEXT,
+                bus_type TEXT,
+                cost INTEGER,
+                description TEXT
+                );
+        """
+        indexquery = f"""
+        CREATE INDEX IF NOT EXISTS idx_work_id ON {self.table_name}(work_id);
+        """
+        self.db.execute_with_auto_commit(query)
+        self.db.execute_with_auto_commit(indexquery)
+    
+    def add_work(self, work: dict):
+        get_work_name_query = f"SELECT work_name FROM {self.table_name} WHERE work_name = '{work.get('work_name')}'"
+        res = self.db.execute_select_query(get_work_name_query)
+        if not res.is_empty():
+            raise ValueError(f"Work with name {work.get('work_name')} already exists")
+        
+        bus_types = BusTypes()
+        if not bus_types.check_bus_type_exists(work.get('bus_type')):
+            raise ValueError(f"Bus type with name {work.get('bus_type')} does not exist")
+        
+        add_work_query = f"""
+        INSERT INTO {self.table_name} (work_name, bus_type, cost, description)
+        VALUES (
+            '{work.get('work_name')}',
+            '{work.get('bus_type')}',
+            {work.get('cost')},
+            '{work.get('description')}'
+        );
+        """
+        self.db.execute_with_auto_commit(add_work_query)
+    
+    def get_all_works_brief(self):
+        query = f"SELECT work_id, work_name, bus_type, cost FROM {self.table_name}"
+        res = self.db.execute_select_query(query)
+        return res.to_dicts()
+    
+    def get_all_works_brief_as_df(self):
+        query = f"SELECT work_id, work_name, bus_type, cost FROM {self.table_name}"
+        res = self.db.execute_select_query(query)
+        return res
+
+    def delete_work(self, work_id):
+        # check if work exists
+        query = f"SELECT * FROM {self.table_name} WHERE work_id = {work_id}"
+        res = self.db.execute_select_query(query)
+        if res.is_empty():
+            raise ValueError(f"Work with id {work_id} does not exist")
+
+        query = f"DELETE FROM {self.table_name} WHERE work_id = {work_id}"
+        self.db.execute_with_auto_commit(query)
+        return True
+    
+    def update_work(self, work_id, work: dict):
+        query_check_work_exists = f"SELECT * FROM {self.table_name} WHERE work_id = {work_id}"
+        res = self.db.execute_select_query(query_check_work_exists)
+        if res.is_empty():
+            raise ValueError(f"Work with id {work_id} does not exist")
+        
+        query = f"""
+        UPDATE {self.table_name}
+        SET 
+        work_name = '{work.get('work_name')}',
+        bus_type = '{work.get('bus_type')}',
+        cost = {work.get('cost')},
+        description = '{work.get('description')}'
+        WHERE work_id = {work_id}
+        """
+        self.db.execute_with_auto_commit(query)
+
+
+class BusTypes:
+
+    def __init__(self) -> None:
+        self.table_name = "bus_types"
+        self.db = DatabaseInterface(DB_NAME)
+        self.check_table_exists()
+
+    def check_table_exists(self):
+        query = f"""
+                CREATE TABLE IF NOT EXISTS {self.table_name} (
+                bus_type_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bus_type TEXT
+                );
+        """
+        indexquery = f"""
+        CREATE INDEX IF NOT EXISTS idx_bus_type_id ON {self.table_name}(bus_type_id);
+        """
+        self.db.execute_with_auto_commit(query)
+        self.db.execute_with_auto_commit(indexquery)
+
+    def add_bus_type(self, bus_type: dict):
+        get_bus_type_query = f"SELECT bus_type FROM {self.table_name} WHERE bus_type = '{bus_type.get('bus_type')}'"
+        res = self.db.execute_select_query(get_bus_type_query)
+        if not res.is_empty():
+            raise ValueError(f"Bus type with name {bus_type.get('bus_type')} already exists")
+        
+        add_bus_type_query = f"""
+        INSERT INTO {self.table_name} (bus_type)
+        VALUES (
+            '{bus_type.get('bus_type')}'
+        );
+        """
+        self.db.execute_with_auto_commit(add_bus_type_query)
+
+    def get_all_bus_types(self):
+        query = f"SELECT * FROM {self.table_name}"
+        res = self.db.execute_select_query(query)
+        return res
+    
+    def delete_bus_type(self, bus_type_id):
+        # check if the bus type exists
+        query = f"SELECT * FROM {self.table_name} WHERE bus_type_id = {bus_type_id}"
+        res = self.db.execute_select_query(query)
+        if res.is_empty():
+            raise ValueError(f"Bus type with id {bus_type_id} does not exist")
+        
+        query = f"DELETE FROM {self.table_name} WHERE bus_type_id = {bus_type_id}"
+        self.db.execute_with_auto_commit(query)
+
+    def update_bus_type(self, bus_type_id, bus_type: dict):
+        query_check_bus_type_exists = f"SELECT * FROM {self.table_name} WHERE bus_type_id = {bus_type_id}"
+        res = self.db.execute_select_query(query_check_bus_type_exists)
+        if res.is_empty():
+            raise ValueError(f"Bus type with id {bus_type_id} does not exist")
+        
+        query = f"""
+        UPDATE {self.table_name}
+        SET 
+        bus_type = '{bus_type.get('bus_type')}'
+        WHERE bus_type_id = {bus_type_id}
+        """
+        self.db.execute_with_auto_commit(query)
+    
+    def check_bus_type_exists(self, bus_type):
+        query = f"SELECT * FROM {self.table_name} WHERE bus_type = '{bus_type}'"
+        res = self.db.execute_select_query(query)
+        return not res.is_empty()
 
     
