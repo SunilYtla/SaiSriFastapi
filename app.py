@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from employees.employee import EmployeeHandler
-from data_handler import EmployeeData, SalaryData, OwnCompanyData, SummaryInsights
+from data_handler import EmployeeData, SalaryData, OwnCompanyData, SummaryInsights, Works
 import logging
 import traceback
 
@@ -107,6 +107,17 @@ async def get_all_own_companies(key: str | None = None, token: str| None = None)
         logger.error(error)
         return {"error": str(error), "has_error": True}
     
+@app.get("/get_all_own_company_names")
+async def get_all_own_company_names(key: str | None = None, token: str| None = None):
+    try:
+        own_company_handler = OwnCompanyData()
+        companies = own_company_handler.get_all_own_company_names()
+        return {"companies": companies, "key": key, "token": token}
+    except Exception:
+        error = traceback.format_exc()
+        logger.error(error)
+        return {"error": str(error), "has_error": True}
+    
 @app.put("/update_own_company")
 async def update_own_company(company_id: int, payload: dict, key: str | None = None, token: str| None = None):
     try:
@@ -178,6 +189,19 @@ async def get_employee_salary_entries(employee_id: int, key: str | None = None, 
         logger.error(error)
         return {"error": str(error), "has_error": True}
 
+@app.get("/get_employee_salary_entries_company")
+async def get_employee_salary_entries_company(employee_id: int, company: str, key: str | None = None, token: str| None = None):
+    try:
+        salary_handler = SalaryData()
+        salary_entries = salary_handler.get_all_salary_entries_of_an_employee_company(employee_id, company)
+        if salary_entries is None:
+            return {"error": "No salary entries found", "has_error": True}
+        return {"salary_entries": salary_entries, "key": key, "token": token}
+    except Exception:
+        error = traceback.format_exc()
+        logger.error(error)
+        return {"error": str(error), "has_error": True}
+
     
 
 @app.delete("/delete_employee_salary_entry")
@@ -215,6 +239,41 @@ async def company_payment_summary(company: str, key: str | None = None, token: s
         logger.error(error)
         return {"error": str(error), "has_error": True}
 
+
+
+@app.get("/get_all_works")
+async def get_all_works(key: str | None = None, token: str| None = None):
+    try:
+        works_handler = Works()
+        works = works_handler.get_all_works_brief()
+        return {"works": works, "key": key, "token": token}
+    except Exception:
+        error = traceback.format_exc()
+        logger.error(error)
+        return {"error": str(error), "has_error": True}
+    
+
+@app.post("/create_work")
+async def create_work(payload: dict, key: str | None = None, token: str| None = None):
+    try:
+        works_handler = Works()
+        works_handler.add_work(payload['data'])
+        return {"msg": "work created", "has_error": False}
+    except Exception:
+        error = traceback.format_exc()
+        logger.error(error)
+        return {"error": str(error), "has_error": True}
+
+@app.delete("/delete_work")
+async def delete_work(work_id: int, key: str | None = None, token: str| None = None):
+    try:
+        works_handler = Works()
+        works_handler.delete_work(work_id)
+        return {"msg": "work deleted", "has_error": False}
+    except Exception:
+        error = traceback.format_exc()
+        logger.error(error)
+        return {"error": str(error), "has_error": True}
 
 
 
